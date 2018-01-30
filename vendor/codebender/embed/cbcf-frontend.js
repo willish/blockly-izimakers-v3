@@ -15,12 +15,14 @@ compilerflasher = function (loadFiles) {
 
     // codebender plugin and app minimum supported versions
     this.minVersion = {
-        pluginFirefox: '1.6.2.1',
+        pluginFirefox: '1.7.0.0',
         pluginChrome: '1.6.0.8',
-        app: '1.0.0.8'
+        app: '1.0.0.11'
     };
-    this.chromeClient = '/embed/chrome-client.js';
+    this.firefoxClient = '/embed/bf-firefox-client.js';
+    this.chromeClient = '/embed/iframe-chrome-client.js';
     this.minimumChromeVersion = 43; // Minimum version of Chrome/Chromium to use with programmers
+    this.maximumFirefoxVersion = 52; // Maximum version of Firefox to use the plugin
     this.chromeUpdateForProgrammersMessage = 'Due to a Chrome bug, to use programmers (or devices that internally use a programmer) you need to update your Chrome to version ' + this.minimumChromeVersion + ' or above.';
     this.isChromeNotSuitableForProgrammers = false;
     this.pluginOrApp = 'plugin'; // String for codebender plugin or app use, used in Logs
@@ -36,56 +38,48 @@ compilerflasher = function (loadFiles) {
      */
     this.eventManager = new function () {
         this._listeners = {};
-
         this.addListener = function (type, listener) {
-            if (typeof this._listeners[type] == 'undefined') {
+            if (typeof this._listeners[type] === 'undefined') {
                 this._listeners[type] = [];
             }
-
             this._listeners[type].push(listener);
         };
-
-        this.fire = function (event, param1, param2) {
-            if (typeof event == 'string') {
-                event = {
-                    type: event
-                };
+        this.fire = function (event) {
+            if (typeof event === 'string') {
+                event = {type: event};
             }
             if (!event.target) {
                 event.target = this;
             }
             if (!event.type) {
-                throw new Error("Event object missing 'type' property.");
+                throw new Error('Event object missing "type" property.');
             }
             if (this._listeners[event.type] instanceof Array) {
+                var eventArguments = [];
+                var i;
+                var argumentsLength = arguments.length;
+                for (i = 1; i < argumentsLength; i++) {
+                    eventArguments.push(arguments[i]);
+                }
                 var listeners = this._listeners[event.type];
-                for (var i = 0, len = listeners.length; i < len; i++) {
-                    if (typeof param1 != 'undefined') {
-                        if (typeof param2 != 'undefined') {
-                            listeners[i].call(this, param1, param2);
-                        }
-                        else {
-                            listeners[i].call(this, param1);
-                        }
-                    }
-                    else {
-                        listeners[i].call(this);
-                    }
+                var listenersLength = listeners.length;
+                for (i = 0; i < listenersLength; i++) {
+                    listeners[i].apply(this, eventArguments);
                 }
             }
         };
-
         this.removeListener = function (type, listener) {
             if (this._listeners[type] instanceof Array) {
                 var listeners = this._listeners[type];
-                for (var i = 0, len = listeners.length; i < len; i++) {
+                var listenersLength = listeners.length;
+                for (var i = 0; i < listenersLength; i++) {
                     if (listeners[i] === listener) {
                         listeners.splice(i, 1);
                         break;
                     }
                 }
             }
-        };
+        }
     };
 
     /**
@@ -149,7 +143,7 @@ compilerflasher = function (loadFiles) {
 
         this.currentPorts = []; // Array to hold the available ports
 
-        this.appNotFound = false; // Flag that codebender app not found or lost
+        this.pluginAppNotFound = false; // Flag that codebender app not found or lost
 
         /**
          * Wrapper function for  codebender plugin/app flashBootloader() function
@@ -330,7 +324,7 @@ compilerflasher = function (loadFiles) {
             var actionId;
             var metaData;
 
-            if (location.indexOf('codebender.cc') != -1 &&
+            if (isCodebenderDomain() &&
                 typeof window.osBrowserIsSupported != 'undefined' && !window.osBrowserIsSupported() &&
                 typeof window.isSupportedOs != 'undefined') {
 
@@ -372,61 +366,53 @@ compilerflasher = function (loadFiles) {
                     this.maxSerialMonitorNewLines = 1024 * 3; // Serial monitor HUD new lines limit
                 }
 
-                // codebender app initialization
-                if (selfCf.useApp) {
-                    this.codebenderPlugin.onLost.addListener(function () {
-                        if (!selfPh.appNotFound) {
-                            selfPh.appNotFound = true;
-                            selfPh.appLost();
-                        }
+                // Initialize app or plugin
+                this.codebenderPlugin.onLost.addListener(function () {
+                    if (!selfPh.pluginAppNotFound) {
+                        selfPh.pluginAppNotFound = true;
+                        selfPh.pluginAppLost();
+                    }
 
-                        setTimeout(function () {
-                            selfPh.codebenderPlugin.init();
-                        }, 3000);
-                    });
+                    setTimeout(function () {
+                        selfPh.codebenderPlugin.init();
+                    }, 3000);
+                });
 
-                    this.codebenderPlugin.onError.addListener(function (error) {
-                        if (!error.badVersion && !selfPh.appNotFound) {
-                            selfPh.appNotFound = true;
-                            selfPh.appLost();
-                        }
-                    });
+                this.codebenderPlugin.onError.addListener(function (error) {
+                    if (!error.badVersion && !selfPh.pluginAppNotFound) {
+                        selfPh.pluginAppNotFound = true;
+                        selfPh.pluginAppLost();
+                    }
 
-                    this.codebenderPlugin.init(function (version) {
+                    setTimeout(function () {
+                        selfPh.codebenderPlugin.init();
+                    }, 3000);
+                });
+
+                this.codebenderPlugin.init(function (version) {
+                    var platformMap = {
+                        'OS X': 'mac',
+                        'Windows': 'windows'
+                    };
+                    var platform = 'linux';
+                    if (typeof Browsers !== 'undefined'
+                        && typeof Browsers.os !== 'undefined'
+                        && typeof Browsers.os.name !== 'undefined'
+                        && platformMap.hasOwnProperty(Browsers.os.name)
+                    ) {
+                        platform = platformMap[Browsers.os.name];
+                    }
+
+                    selfPh.codebenderPlugin.setPlatformInfo({
+                        os: platform
+                    }, function () {
                         selfPh.plugin_searched = true;
                         selfPh.plugin_found = true;
 
-                        selfPh.appNotFound = false;
+                        selfPh.pluginAppNotFound = false;
                         selfPh.runPlugin(version);
-                    }, 5000);
-                }
-                // codebender plugin initialization
-                else {
-                    this.searchPlugin();
-                    if (!this.plugin_found) {
-                        var alert = this.browserSpecificPluginInstall('To program your Arduino from your browser, install the codebender');
-                        selfCf.setOperationOutput(alert);
-                        selfCf.eventManager.fire('plugin_notification', alert);
-
-                        actionId = 35;
-                        metaData = {
-                            "plugin": false,
-                            "message": 'Not on navigator plugins.'
-                        };
-                        createLogCompilerflasher(actionId, metaData);
-
-                        var pluginSearchInterval = setInterval(function () {
-                            selfPh.searchPlugin();
-                            if (selfPh.plugin_found) {
-                                clearInterval(pluginSearchInterval);
-                                selfPh.runPlugin();
-                            }
-                        }, 2000);
-                    }
-                    else {
-                        this.runPlugin();
-                    }
-                }
+                    });
+                }, 5000);
             }
         };
 
@@ -443,10 +429,11 @@ compilerflasher = function (loadFiles) {
         /**
          * Handler for when codebender app is missing (uninstalled or disabled)
          */
-        this.appLost = function () {
+        this.pluginAppLost = function () {
             clearInterval(pluginLoggingInterval);
             clearInterval(getFireInterval);
 
+            selfPh.currentPorts = [];
             selfPh.plugin_searched = true;
             selfPh.plugin_found = false;
             selfPh.plugin_initialized = false;
@@ -466,6 +453,10 @@ compilerflasher = function (loadFiles) {
             $('#cb_cf_serial_monitor_connect').attr('disabled', 'disabled');
 
             var alert = selfPh.browserSpecificPluginInstall('To program your Arduino from your browser, install the codebender');
+            var check = window.checkMaximumFirefoxVersion(this.maximumFirefoxVersion);
+            if (check) {
+              alert = 'Firefox support is discontinued. Please use Google Chrome or Chromium.';
+            }
             selfCf.setOperationOutput(alert);
             selfCf.eventManager.fire('plugin_notification', alert);
             selfCf.eventManager.fire('plugin_not_found');
@@ -494,12 +485,6 @@ compilerflasher = function (loadFiles) {
             selfCf.setOperationOutput('<i class="icon-spinner icon-spin"></i>  Initializing ' + selfCf.pluginOrApp + ' ... Make sure that you allow plugin execution on your browser. <a href="http://feedback.codebender.cc/knowledgebase/topics/57328-plugin">More Info</a>');
             selfCf.eventManager.fire('plugin_notification', '<i class="icon-spinner icon-spin"></i>  Initializing ' + selfCf.pluginOrApp + ' ... Make sure that you allow plugin execution on your browser. <a href="http://feedback.codebender.cc/knowledgebase/topics/57328-plugin">More Info</a>');
 
-            // codebender plugin
-            if (!selfCf.useApp) {
-                $('body').append('<object id="plugin0" type="application/x-codebendercc" width="0" height="0" xmlns="http://www.w3.org/1999/html"></object>');
-                selfPh.codebenderPlugin = document.getElementById('plugin0');
-            }
-
             var plugin_init_interval = setInterval(function () {
                 if (typeof selfPh.codebenderPlugin.probeUSB != 'undefined') {
                     clearInterval(plugin_init_interval);
@@ -507,15 +492,7 @@ compilerflasher = function (loadFiles) {
                     selfPh.plugin_initialized = true;
 
                     // codebender plugin/app version
-                    // codebender app
-                    if (selfCf.useApp) {
-                        selfPh.plugin_version = version;
-                        selfPh.codebenderPlugin.version = version;
-                    }
-                    // codebender plugin
-                    else {
-                        selfPh.plugin_version = selfPh.codebenderPlugin.version;
-                    }
+                    selfPh.plugin_version = selfPh.codebenderPlugin.version;
                     window.plugin_version = selfPh.plugin_version;
 
                     var actionId = 35;
@@ -535,21 +512,7 @@ compilerflasher = function (loadFiles) {
                     }
 
                     // Get tabID from codebender plugin/app
-                    // codebender app
-                    if (selfCf.useApp && compilerflasher.pluginHandler.codebenderPlugin.api.local) {
-                        Object.defineProperty(compilerflasher.pluginHandler, 'tabID', {
-                            get: function () {
-                                return this.codebenderPlugin.api.local.clientId;
-                            }
-                        });
-                    }
-                    // codebender plugin
-                    if (!selfCf.useApp && typeof selfPh.codebenderPlugin.init != 'undefined') {
-                        selfPh.codebenderPlugin.init();
-                        if (selfPh.codebenderPlugin.instance_id != 'undefined') {
-                            selfPh.tabID = parseInt(selfPh.codebenderPlugin.instance_id);
-                        }
-                    }
+                    selfPh.tabID = parseInt(selfPh.codebenderPlugin.instanceId());
 
                     // Register on tab close handler
                     if (typeof selfPh.codebenderPlugin.closeTab != 'undefined') {
@@ -561,6 +524,8 @@ compilerflasher = function (loadFiles) {
                     else {
                         selfPh.disconnect();
                     }
+
+                    selfCf.eventManager.fire('run_plugin_triggered');
                 }
             }, 100);
         };
@@ -661,17 +626,23 @@ compilerflasher = function (loadFiles) {
                 clearInterval(pluginLoggingInterval);
             }
             else if (this.codebenderPlugin.version === null) {
-                alert = this.browserSpecificPluginInstall("To program your Arduino from your browser, install the codebender");
-                selfCf.setOperationOutput(alert);
-                selfCf.eventManager.fire('plugin_notification', alert);
-                actionId = 27;
-                metaData = {
-                    "success": true,
-                    "plugin": false,
-                    "alert": "To program your Arduino from your browser, install the codebender plugin or app."
-                };
-                createLogCompilerflasher(actionId, metaData);
-                clearInterval(pluginLoggingInterval);
+              var alert = this.browserSpecificPluginInstall("To program your Arduino from your browser, install the codebender");
+              var check = window.checkMaximumFirefoxVersion(this.maximumFirefoxVersion);
+              if (check) {
+                  alert = 'Firefox support is discontinued on this version. Please use Google Chrome or Chromium.';
+              }
+
+              selfCf.setOperationOutput(alert);
+              selfCf.eventManager.fire('plugin_notification', alert);
+
+              actionId = 27;
+              metaData = {
+                  "success": true,
+                  "plugin": false,
+                  "alert": "To program your Arduino from your browser, install the codebender plugin or app."
+              };
+              createLogCompilerflasher(actionId, metaData);
+              clearInterval(pluginLoggingInterval);
             }
             else {
                 this.enableUSB();
@@ -741,17 +712,9 @@ compilerflasher = function (loadFiles) {
                         ports += elem['port'] + ',';
                     });
 
-                    // codebender app
-                    if (selfCf.useApp) {
-                        selfPh.codebenderPlugin.probeUSB(function (probeUsbPorts) {
-                            createPortsLog(ports, probeUsbPorts, parsedList);
-                        });
-                    }
-                    // codebender plugin
-                    else {
-                        var probeUsbPorts = selfPh.codebenderPlugin.probeUSB();
+                    selfPh.codebenderPlugin.probeUSB(function (probeUsbPorts) {
                         createPortsLog(ports, probeUsbPorts, parsedList);
-                    }
+                    });
                 }
 
                 window.oldSerialPortsAvail = serialPortsAvail;
@@ -768,6 +731,7 @@ compilerflasher = function (loadFiles) {
                         metaData = {
                             "message": "Non catchable plugin crash.",
                             "tabID": selfPh.tabID,
+                            "type": selfCf.pluginOrApp,
                             "version": (window.plugin_version == 'undefined' || window.plugin_version === null) ? "undefined" : window.plugin_version,
                             "OS": {
                                 "name": (typeof Browsers.os.name == 'undefined') ? 'undefined' : Browsers.os.name,
@@ -816,15 +780,9 @@ compilerflasher = function (loadFiles) {
                         window.oldPortsAvail = portsAvail;
 
                         if (typeof selfPh.codebenderPlugin.getPorts != 'undefined') {
-                            if (selfCf.useApp) {
-                                selfPh.codebenderPlugin.getPorts(function (portsList) {
-                                    getPortsCallback(portsList);
-                                });
-                            }
-                            else {
-                                var portsList = selfPh.codebenderPlugin.getPorts();
+                            selfPh.codebenderPlugin.getPorts(function (portsList) {
                                 getPortsCallback(portsList);
-                            }
+                            });
                         }
                     }
                 }
@@ -943,7 +901,7 @@ compilerflasher = function (loadFiles) {
 
             var href;
 
-            if (location.indexOf("codebender.cc") == -1 || selfCf.embedded) {
+            if (isCodebenderDomain()==false || selfCf.embedded) {
                 var refreshMessage = '';
                 if (alert.indexOf('You need to update the codebender') > -1) {
                     refreshMessage += ' (after the update please refresh the page)';
@@ -1028,10 +986,6 @@ compilerflasher = function (loadFiles) {
             setTimeout(function () {
                 selfPh.scan();
             }, 200);
-
-            setTimeout(function () {
-                selfPh.loadPort();
-            }, 500);
         };
 
         /**
@@ -1060,6 +1014,7 @@ compilerflasher = function (loadFiles) {
         function getFireCallback(ports) {
             if (selfPh.oldPorts === null) {
                 selfPh.logPorts();
+                selfPh.loadPort();
                 selfPh.oldPorts = '';
             }
             if (ports != selfPh.oldPorts) {
@@ -1092,32 +1047,21 @@ compilerflasher = function (loadFiles) {
                 }
 
                 if (typeof this.codebenderPlugin.getPorts != 'undefined') {
-                    if (selfCf.useApp) {
-                        this.codebenderPlugin.getPorts(function (currentPorts) {
-                            ports = getPortsCallback(currentPorts);
-                            getFireCallback(ports);
-                        });
-                    }
-                    else {
-                        var currentPorts = this.codebenderPlugin.getPorts();
+                    this.codebenderPlugin.getPorts(function (currentPorts) {
                         ports = getPortsCallback(currentPorts);
                         getFireCallback(ports);
-                    }
+                    });
                 }
                 else {
-                    if (selfCf.useApp) {
-                        this.codebenderPlugin.probeUSB(function (ports) {
-                            getFireCallback(ports);
-                        });
-                    }
-                    else {
-                        ports = this.codebenderPlugin.probeUSB();
+                    this.codebenderPlugin.probeUSB(function (ports) {
                         getFireCallback(ports);
-                    }
+                    });
                 }
             }
             catch (error) {
                 $('#cb_cf_ports').find('option').remove();
+                this.currentPorts = [];
+                this.loadPort();
                 this.oldPorts = ports;
             }
         };
@@ -1127,6 +1071,8 @@ compilerflasher = function (loadFiles) {
          * Initializes getFire() interval
          */
         this.scan = function () {
+            // TODO: Check how the permissions error can implemented in setCallback from now on
+
             // For plugin: Called when an error occurs
             // For app: Fail safe callback in case something went wrong
             //          Used for compatibility with the plugin
@@ -1135,21 +1081,21 @@ compilerflasher = function (loadFiles) {
                     var actionId = 30000;
                     createLogCompilerflasher(actionId, output);
                 }
-                else if (output == "disconnect") {
+                else if (output == 'disconnect') {
                     compilerflasher.pluginHandler.disconnect(true);
                 }
                 else {
                     // Do not print to operation output return values
                     if (typeof output != 'number') {
-                        compilerflasher.eventManager.fire("plugin_notification", output);
+                        compilerflasher.eventManager.fire('plugin_notification', output);
                         compilerflasher.setOperationOutput(output);
                     }
                 }
             });
 
             if (typeof window.hasPerm != 'undefined' && !window.hasPerm) {
-                compilerflasher.setOperationOutput("You need to grant permissions to the codebender");
-                compilerflasher.eventManager.fire('plugin_notification', "You need to grant permissions to the codebender");
+                compilerflasher.setOperationOutput('You need to grant permissions to the codebender');
+                compilerflasher.eventManager.fire('plugin_notification', 'You need to grant permissions to the codebender');
             }
 
             this.getFire();
@@ -1191,8 +1137,8 @@ compilerflasher = function (loadFiles) {
         /**
          * Connects the serial monitor
          */
-            // Flag for port validator interval
-            // Interval checks if the port in which serial monitor is open, is still available
+        // Flag for port validator interval
+        // Interval checks if the port in which serial monitor is open, is still available
         this.portValidatorIntervalRuns = false;
 
         this.connect = function () {
@@ -1207,6 +1153,8 @@ compilerflasher = function (loadFiles) {
                 this.disconnect();
                 return;
             }
+
+            selfCf.eventManager.fire('serial-monitor-connected');
 
             var $baudRates = $('#cb_cf_baud_rates');
             var speed = $baudRates.find('option:selected').val();
@@ -1226,11 +1174,6 @@ compilerflasher = function (loadFiles) {
                 window.operationInProgress = false;
                 selfCf.setOperationOutput("Please select a valid port!");
                 selfCf.eventManager.fire('plugin_notification', "Please select a valid port!");
-								
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('', 'Please select a valid port!');
-										/* fin iziMakers */
                 return;
             }
 
@@ -1241,6 +1184,7 @@ compilerflasher = function (loadFiles) {
             $("#serial_monitor_content").fadeIn(300);
 
             this.connected = true;
+            selfCf.eventManager.fire('serial-monitor-connected');
 
             $serialMonitorConnect
                 .html('<i class="icon-unlink"></i> Disconnect')
@@ -1258,10 +1202,10 @@ compilerflasher = function (loadFiles) {
             };
 
             function serialReadCallback(from, line) {
-                if (line.indexOf('connecting at') < 0) {
-                    selfPh.serialMonitorStats.bytesReceived += line.length;
-                }
+                selfPh.serialMonitorStats.bytesReceived += line.length;
+
                 selfPh.serialHudAppendString(line);
+                selfCf.eventManager.fire('serial-monitor-received-data', line);
 
                 // codebender app
                 if (selfCf.useApp) {
@@ -1269,7 +1213,7 @@ compilerflasher = function (loadFiles) {
                 }
             }
 
-            function serialCloseCallback(from, line) {
+            function serialConnectCallback(from, line) {
                 var actionId = 69;
                 var metaData = {
                     "retVal": line,
@@ -1293,20 +1237,10 @@ compilerflasher = function (loadFiles) {
                     compilerflasher.setOperationOutput(msg);
                     compilerflasher.eventManager.fire("plugin_notification", msg);
                 }
-
-                var notified = false;
-                if (retVal == -22) {
-                    notified = true;
-                }
-
-                // codebender app
-                if (selfCf.useApp) {
-                    selfPh.disconnect(notified);
-                }
             }
 
             var port = this.portslist.options[this.portslist.selectedIndex].text;
-            this.codebenderPlugin.serialRead(port, speed, serialReadCallback, serialCloseCallback);
+            this.codebenderPlugin.serialRead(port, speed, serialReadCallback, serialConnectCallback);
 
             this.serialMonitorToAppend = '';
             this.serialMonitorVal = '';
@@ -1365,21 +1299,11 @@ compilerflasher = function (loadFiles) {
             if (typeof this.codebenderPlugin.availablePorts != 'undefined') {
                 portValidatorInterval = setInterval(function () {
                     selfPh.portValidatorIntervalRuns = true;
-                    if (selfCf.useApp) {
-                        selfPh.codebenderPlugin.availablePorts(function (ports) {
-                            if (ports.indexOf(port) == -1) {
-                                availablePortsCallback();
-                            }
-                        });
-                    }
-                    else {
-                        if (selfPh.isPluginVisible() && selfPh.codebenderPlugin.availablePorts) {
-                            var ports = selfPh.codebenderPlugin.availablePorts();
-                            if (ports.indexOf(port) == -1) {
-                                availablePortsCallback();
-                            }
+                    selfPh.codebenderPlugin.availablePorts(function (ports) {
+                        if (ports.indexOf(port) == -1) {
+                            availablePortsCallback();
                         }
-                    }
+                    });
                 }, 100);
             }
 
@@ -1393,7 +1317,19 @@ compilerflasher = function (loadFiles) {
          *        and call plugin method serialMonitorSetStatus()
          */
         this.disconnect = function (notified) {
-            // codebender plugin
+            notified = notified || false;
+
+            var $baudRates = $('#cb_cf_baud_rates');
+            if (!notified) {
+                var actionId = 59;
+                var metaData = {
+                    'baudrate': $baudRates.find('option:selected').val(),
+                    'port': selfPh.serialMonitorPort,
+                    'tabID': this.tabID,
+                    'serialMonitorStats': this.serialMonitorStats
+                };
+                createLogCompilerflasher(actionId, metaData);
+            }
 
             if (!this.connected) {
                 return;
@@ -1401,23 +1337,10 @@ compilerflasher = function (loadFiles) {
 
             window.operationInProgress = true;
 
-            notified = notified || false;
-
-            var $baudRates = $('#cb_cf_baud_rates');
-            if (!notified) {
-                var actionId = 59;
-                var metaData = {
-                    "baudrate": $baudRates.find('option:selected').val(),
-                    "port": selfPh.serialMonitorPort,
-                    "tabID": this.tabID,
-                    "serialMonitorStats": this.serialMonitorStats
-                };
-                createLogCompilerflasher(actionId, metaData);
-            }
-
-            selfPh.serialMonitorPort = null;
-
-            if (!notified && selfPh.portValidatorIntervalRuns) {
+            // Clear the connected port check interval
+            if (!notified
+                && selfPh.portValidatorIntervalRuns
+            ) {
                 clearInterval(portValidatorInterval);
                 selfPh.portValidatorIntervalRuns = false;
             }
@@ -1431,6 +1354,7 @@ compilerflasher = function (loadFiles) {
                 });
 
             this.connected = false;
+            selfCf.eventManager.fire('serial-monitor-disconnected');
 
             // UI updates
             $baudRates.removeAttr('disabled');
@@ -1446,9 +1370,9 @@ compilerflasher = function (loadFiles) {
 
             $serialMonitorConnect.removeClass('active');
 
-            $("#serial_monitor_content").fadeOut(300);
+            $('#serial_monitor_content').fadeOut(300);
 
-            // Clear the connected port check interval
+            // Clear the serial monitor update interval
             clearInterval(serialMonitorUpdater);
 
             // codebender plugin
@@ -1580,12 +1504,10 @@ compilerflasher = function (loadFiles) {
                 appDataRateMeter.dataRateMeter(inputText.length, 'received');
             }
 
-            var comparePluginVersion = this.comparePluginVersions(this.parseVersionString(this.codebenderPlugin.version), this.parseVersionString('1.6.0.8'));
-            if (selfCf.useApp || comparePluginVersion <= 0) {
+            try {
                 this.codebenderPlugin.serialWrite(inputText);
             }
-            else {
-                this.codebenderPlugin.serialWrite(inputText, this.serialMonitorPort);
+            catch (error) {
             }
 
             if ($('#echo_check').is(':checked')) {
@@ -1613,6 +1535,7 @@ compilerflasher = function (loadFiles) {
             if (typeof status == 'undefined' || status == 0) {
                 actionId = 34;
                 metaData = {
+                    "type": selfCf.pluginOrApp,
                     "message": msg,
                     "version": (window.plugin_version == 'undefined' || window.plugin_version === null) ? "undefined" : window.plugin_version,
                     "url": window.location.pathname,
@@ -1631,6 +1554,7 @@ compilerflasher = function (loadFiles) {
             else if (status == 1) {
                 actionId = 55;
                 metaData = {
+                    "type": selfCf.pluginOrApp,
                     "message": msg,
                     "version": (window.plugin_version == 'undefined' || window.plugin_version === null) ? "undefined" : window.plugin_version,
                     "url": window.location.pathname,
@@ -1943,10 +1867,6 @@ compilerflasher = function (loadFiles) {
         }
         else {
             msg = "An error occurred while connecting to your device. Please try again.";
-						
-										/* iziMakers */
-										toastr.error('', 'An error occurred while connecting to your device.');
-										/* fin iziMakers */
         }
 
         return msg;
@@ -1965,11 +1885,6 @@ compilerflasher = function (loadFiles) {
             var msg = compilerflasher.getFlashFailMessage(progress);
             compilerflasher.setOperationOutput(msg);
             compilerflasher.eventManager.fire('flash_failed', msg, progress);
-						
-						/* iziMakers */
-						toastr.clear();
-						toastr.error(msg, 'Flash Failed');		// toastr.error('flash_failed', 'flash_failed');
-						/* fin iziMakers */
 
             if (progress != 0 && (progress > -1 || progress < -23) && progress != -30 && progress != -55 && progress != -56 && progress != -57) {
                 actionId = 51;
@@ -1977,19 +1892,10 @@ compilerflasher = function (loadFiles) {
                     "version": compilerflasher.pluginHandler.codebenderPlugin.version,
                     "retVal": progress
                 };
-                // codebender app
-                if (selfCf.useApp) {
-                    compilerflasher.pluginHandler.codebenderPlugin.getFlashResult(function (result) {
-                        metaData["flashResult"] = result.substring(0, 1800);
-                        createLogCompilerflasher(actionId, metaData);
-                    });
-                }
-                // codebender plugin
-                else {
-                    var result = compilerflasher.pluginHandler.codebenderPlugin.getFlashResult();
-                    metaData["flashResult"] = result.substring(0, 1800);
+                compilerflasher.pluginHandler.codebenderPlugin.getFlashResult(function (result) {
+                    metaData['flashResult'] = result.substring(0, 1800);
                     createLogCompilerflasher(actionId, metaData);
-                }
+                });
             }
 
             if (selfCf.useApp) {
@@ -1999,11 +1905,6 @@ compilerflasher = function (loadFiles) {
         else {
             compilerflasher.eventManager.fire('flash_succeed');
             compilerflasher.setOperationOutput('Upload successful!');
-						
-						/* iziMakers */
-						toastr.clear();
-						toastr.success('Enjoy!', 'Upload successful!');
-						/* fin iziMakers */
         }
 
         actionId = 7;
@@ -2039,30 +1940,15 @@ compilerflasher = function (loadFiles) {
                 if (!obj.success) {
                     selfCf.setOperationOutput("Verification failed.");
                     selfCf.eventManager.fire('hex_failed', obj.message);
-										
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('', 'Verification failed.');
-										/* fin iziMakers */
                 }
                 else {
                     selfCf.setOperationOutput("Verification Successful!");
                     selfCf.eventManager.fire('hex_succeed', obj);
-										
-										/* iziMakers */
-										toastr.clear();
-										toastr.success('', 'Verification Successful!', {timeOut: 10000});
-										/* fin iziMakers */
                 }
             }
             catch (error) {
                 selfCf.eventManager.fire('hex_failed', '<i class="icon-remove"></i> Unexpected error occured. Try again later.');
                 selfCf.setOperationOutput('<i class="icon-remove"></i> Unexpected error occured. Try again later.');
-								
-								/* iziMakers */
-								toastr.clear();
-								toastr.error('Try again later.', 'Unexpected error occured. ');
-								/* fin iziMakers */
             }
         });
     };
@@ -2077,10 +1963,6 @@ compilerflasher = function (loadFiles) {
             return;
         }
         window.operationInProgress = true;
-				
-								/* iziMakers */
-								toastr.info('Please wait...', 'Compiling...', {timeOut: 60000});		// Uploading
-								/* fin iziMakers */
 
         var actionId = 40;
         this.usingProgrammer = false;
@@ -2100,12 +1982,6 @@ compilerflasher = function (loadFiles) {
         if (selfCf.useApp && selfCf.isChromeNotSuitableForProgrammers) {
             selfCf.setOperationOutput(selfCf.chromeUpdateForProgrammersMessage);
             selfCf.eventManager.fire('flash_failed', selfCf.chromeUpdateForProgrammersMessage);
-						
-								/* iziMakers */
-								toastr.clear();
-								toastr.error('error', 'Error');
-								/* fin iziMakers */
-						
             return;
         }
 
@@ -2113,27 +1989,16 @@ compilerflasher = function (loadFiles) {
             this.setOperationOutput('Please select a valid port!');
             this.eventManager.fire('plugin_notification', 'Please select a valid port!');
             window.operationInProgress = false;
-						
-								/* iziMakers */
-								toastr.clear();
-								toastr.error('', 'Please select a valid port!');
-								/* fin iziMakers */
-						
             return;
         }
 
         this.eventManager.fire('pre_flash');
-        this.setOperationOutput('<i class="icon-spinner icon-spin"> </i> Working...');
+        this.setOperationOutput('<i class="icon-spinner icon-spin"></i> Working...');
         this.getbin(function (obj) {
             if (!obj.success) {
                 selfCf.setOperationOutput('There was an error compiling.');
                 selfCf.eventManager.fire('verification_failed', obj.message);
                 window.operationInProgress = false;
-								
-								/* iziMakers */
-								toastr.clear();
-								toastr.error('obj.message', 'There was an error compiling.');
-								/* fin iziMakers */
             }
             else {
                 selfCf.eventManager.fire('mid_flash', obj.size);
@@ -2155,17 +2020,8 @@ compilerflasher = function (loadFiles) {
                     };
                     createLogCompilerflasher(actionId, metaData);
                     window.operationInProgress = false;
-										
-										/* iziMakers */
-										toastr.error('', 'There is not enough space!');
-										/* fin iziMakers */
                 }
-                else {										
-										/* iziMakers */
-										toastr.clear();
-										toastr.info('Please wait...', 'Compiling done, Uploading...', {timeOut: 60000});
-										/* fin iziMakers */
-										
+                else {
                     if (selfCf.pluginHandler.connected) {
                         selfCf.pluginHandler.disconnect(false);
                         setTimeout(function () {
@@ -2206,12 +2062,6 @@ compilerflasher = function (loadFiles) {
         if (selfCf.useApp && selfCf.isChromeNotSuitableForProgrammers) {
             selfCf.setOperationOutput(selfCf.chromeUpdateForProgrammersMessage);
             selfCf.eventManager.fire('flash_failed', selfCf.chromeUpdateForProgrammersMessage);
-						
-						/* iziMakers */
-						toastr.clear();
-						toastr.error(selfCf.chromeUpdateForProgrammersMessage, 'Flash Failed');
-						/* fin iziMakers */
-						
             return;
         }
 
@@ -2219,26 +2069,16 @@ compilerflasher = function (loadFiles) {
             this.setOperationOutput('Please select a valid port for the programmer!');
             this.eventManager.fire('plugin_notification', 'Please select a valid port for the programmer!');
             window.operationInProgress = false;
-						
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('', 'Please select a valid port for the programmer!');
-										/* fin iziMakers */
             return;
         }
 
         this.eventManager.fire('pre_flash');
-        this.setOperationOutput('<i class="icon-spinner icon-spin"> </i> Working...');
+        this.setOperationOutput('<i class="icon-spinner icon-spin"></i> Working...');
         this.getbin(function (obj) {
             if (!obj.success) {
                 selfCf.setOperationOutput('There was an error compiling.');
                 selfCf.eventManager.fire('verification_failed', obj.message);
                 window.operationInProgress = false;
-								
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('', 'There was an error compiling.');
-										/* fin iziMakers */
             }
             else {
                 selfCf.eventManager.fire('mid_flash', obj.size);
@@ -2259,11 +2099,6 @@ compilerflasher = function (loadFiles) {
                     };
                     createLogCompilerflasher(actionId, metaData);
                     window.operationInProgress = false;
-										
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('', 'There is not enough space!');
-										/* fin iziMakers */
                 }
                 else {
                     if (selfCf.pluginHandler.connected) {
@@ -2300,31 +2135,21 @@ compilerflasher = function (loadFiles) {
                 selfCf.setOperationOutput('<i class="icon-remove"></i> Unexpected error occurred. Try again later.');
                 selfCf.eventManager.fire('verification_failed', '<i class="icon-remove"></i> Unexpected error occurred. Try again later.');
                 window.operationInProgress = false;
-								
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('Try again later.', 'Unexpected error occurred. ');
-										/* fin iziMakers */
             }
-        })
-            .fail(function () {
-                selfCf.setOperationOutput('Connection to server failed.');
-                selfCf.eventManager.fire('verification_failed', 'Connection to server failed.');
-                window.operationInProgress = false;
-								
-										/* iziMakers */
-										toastr.clear();
-										toastr.error('', 'Connection to server failed.');
-										/* fin iziMakers */
-            });
+        }).fail(function () {
+            selfCf.setOperationOutput('Connection to server failed.');
+            selfCf.eventManager.fire('verification_failed', 'Connection to server failed.');
+            window.operationInProgress = false;
+        });
     };
 
     /**
      * Callback function for #cb_cf_verify_btn
      * Verifies a sketch
      * Uses getbin()
+     * @param id Optional id for the verification
      */
-    this.verify = function () {
+    this.verify = function (id) {
         if (window.operationInProgress || !this.enableShortCuts) {
             return;
         }
@@ -2341,24 +2166,18 @@ compilerflasher = function (loadFiles) {
         createLogCompilerflasher(actionId, metaData);
 
         this.eventManager.fire('pre_verify');
-        this.setOperationOutput('<i class="icon-spinner icon-spin"> </i> Working...');
+        this.setOperationOutput('<i class="icon-spinner icon-spin"></i> Working...');
 
         this.getbin(function (obj) {
+            selfCf.eventManager.fire('compiler-response', obj, id);
+
             if (!obj.success) {
                 selfCf.setOperationOutput('Verification failed.');
                 selfCf.eventManager.fire('verification_failed', obj.message);
-								
-										/* iziMakers */
-										toastr.error('', 'Verification failed.');
-										/* fin iziMakers */
             }
             else {
                 selfCf.setOperationOutput('Verification Successful');
                 selfCf.eventManager.fire('verification_succeed', obj.size);
-								
-										/* iziMakers */
-										toastr.success('', 'Verification Successful');
-										/* fin iziMakers */
             }
             window.operationInProgress = false;
         });
@@ -2392,14 +2211,12 @@ compilerflasher = function (loadFiles) {
         else {
             var url = generatePath('bootloader', '/bootloader/');
             url += this.selectedBoard['bootloader']['file'].replace('.hex', '.txt');
-            $.get(url)
-                .success(function (data) {
-                    selfCf.pluginHandler.codebenderPlugin.saveToHex(data);
-                    window.result = selfCf.pluginHandler.doflashBootloader(selfCf.selectedProgrammer, selfCf.selectedBoard);
-                })
-                .error(function () {
-                    selfCf.setOperationOutput('The bootloader file was not found.');
-                });
+            $.get(url).success(function (data) {
+                selfCf.pluginHandler.codebenderPlugin.saveToHex(data);
+                window.result = selfCf.pluginHandler.doflashBootloader(selfCf.selectedProgrammer, selfCf.selectedBoard);
+            }).error(function () {
+                selfCf.setOperationOutput('The bootloader file was not found.');
+            });
         }
     };
 
@@ -2630,10 +2447,12 @@ compilerflasher = function (loadFiles) {
 
     /**
      * Loads BabelFish for codebender app
+     * @param clientKey Client file key to use
+     * @param clientFile Client file to load
      * @param initializeCallback Callback function to execute after BabelFish loaded
      */
-    function clientLoader (initializeCallback) {
-        var path = generatePath('chromeClient', selfCf.chromeClient);
+    function clientLoader (clientKey, clientFile, initializeCallback) {
+        var path = generatePath(clientKey, clientFile);
         var script = document.createElement('script');
         script.async = true;
         document.body.appendChild(script);
@@ -2654,6 +2473,7 @@ compilerflasher = function (loadFiles) {
     function isCodebenderDomain() {
         return window.location.origin.indexOf('codebender.cc') > -1;
     }
+
 
     /**
      * Starts the initialization of compilerflasher
@@ -2691,7 +2511,12 @@ compilerflasher = function (loadFiles) {
      * Decides whether codebender plugin or app should be used
      */
     function initPluginOrApp() {
-        if (isCodebenderDomain()) {
+        var clientKey = 'bfFirefoxClient';
+        var clientFile = selfCf.firefoxClient;
+
+        
+        /* Why should we refuse to initialise if we are not on the Codebender domain? */
+        //if (isCodebenderDomain()) {
             var useAppInterval = setInterval(function () {
                 if (typeof window.useChromeApp === 'function'
                     && typeof window.isChrome === 'function'
@@ -2701,24 +2526,24 @@ compilerflasher = function (loadFiles) {
 
                     selfCf.useChrome = window.isChrome();
 
+
                     // use codebender app
                     if (window.useChromeApp()) {
                         selfCf.pluginOrApp = 'app';
                         selfCf.useApp = true;
+                        clientKey = 'iframeChromeClient';
+                        clientFile = selfCf.chromeClient;
                         selfCf.isChromeNotSuitableForProgrammers = window.isChromeNotSuitableForProgrammers();
-                        clientLoader(initializeCompilerflasher);
                     }
-                    // use codebender plugin
-                    else {
-                        initializeCompilerflasher();
-                    }
+
+                    clientLoader(clientKey, clientFile, initializeCompilerflasher);
                 }
             }, 100);
-        }
-        // use codebender plugin
-        else {
-            initializeCompilerflasher();
-        }
+
+            return;
+        //}
+
+        clientLoader(clientKey, clientFile, initializeCompilerflasher);
     }
 
     /**
@@ -2833,7 +2658,11 @@ compilerflasher = function (loadFiles) {
      * @returns {string|XML} Decoded HTML string
      */
     function decodeHtml(html) {
-        return html.replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        return html.replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#039;/g, "'");
     }
 
     /**
@@ -2842,7 +2671,17 @@ compilerflasher = function (loadFiles) {
      * @returns {string|XML} Escaped HTML string
      */
     function escapeHtml(html) {
-        return html.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        var map = {
+            '&': '&amp;',
+            '<': '&lt;',
+            '>': '&gt;',
+            '"': '&quot;',
+            "'": '&#039;'
+        };
+
+        return html.replace(/[&<>"']/g, function(m) {
+            return map[m];
+        });
     }
 
     /**
@@ -3281,7 +3120,7 @@ compilerflasher = function (loadFiles) {
      * @returns {*} Serial monitor section HTML
      */
     function getSerialMonitorSection() {
-        var staticSerialMonitorSection = '\x3Cstyle\x3E\x0A\x09\x23serial_monitor_content\x0A\x09\x7B\x0A\x09\x09display\x3A\x20none\x3B\x0A\x09\x7D\x0A\x0A\x09\x23serial_hud\x0A\x09\x7B\x0A\x09\x09overflow\x2Dy\x3A\x20scroll\x3B\x0A\x09\x7D\x0A\x0A\x09\x23serial_monitor_hud_and_autoscroll\x0A\x09\x7B\x0A\x09\x09display\x3A\x20inline\x2Dblock\x3B\x0A\x09\x7D\x0A\x0A\x09\x23serial\x2Dchecboxes\x0A\x09\x7B\x0A\x09\x09display\x3A\x20inline\x2Dblock\x3B\x0A\x09\x7D\x0A\x0A\x09\x23serial\x2Dchecboxes\x20\x3E\x20label\x0A\x09\x7B\x0A\x09\x09margin\x2Dbottom\x3A\x200\x3B\x0A\x09\x7D\x0A\x0A\x09\x23autoscroll_label\x0A\x09\x7B\x0A\x09\x09position\x3A\x20relative\x3B\x0A\x09\x09top\x3A\x208px\x3B\x0A\x09\x7D\x0A\x0A\x09\x23autoscroll_check\x0A\x09\x7B\x0A\x09\x09display\x3A\x20block\x3B\x0A\x09\x7D\x0A\x0A\x09\x23echo_label\x0A\x09\x7B\x0A\x09\x09position\x3A\x20relative\x3B\x0A\x09\x09top\x3A\x203px\x3B\x0A\x09\x7D\x0A\x0A\x09.serial\x2Dmonitor\x2Decho\x0A\x09\x7B\x0A\x09\x09display\x3A\x20inline\x2Dblock\x3B\x0A\x09\x09color\x3A\x20\x23FF0000\x3B\x0A\x09\x7D\x0A\x0A\x09\x23serial\x2Dline\x2Dendings\x0A\x09\x7B\x0A\x09\x09width\x3A\x20130px\x3B\x0A\x09\x09margin\x2Dbottom\x3A\x2010px\x3B\x0A\x09\x7D\x0A\x3C\x2Fstyle\x3E\x0A\x0A\x3Cdiv\x20id\x3D\x22serial_monitor_content\x22\x3E\x0A\x09\x3Cdiv\x20id\x3D\x22serial_monitor_hud_and_autoscroll\x22\x3E\x0A\x09\x09\x3Cpre\x20id\x3D\x22serial_hud\x22\x20class\x3D\x22well\x22\x3E\x3C\x2Fpre\x3E\x0A\x0A\x09\x20\x20\x20\x20\x3Cspan\x20id\x3D\x22serial\x2Dchecboxes\x22\x3E\x0A\x09\x09\x20\x20\x20\x20\x3Clabel\x20id\x3D\x22autoscroll_label\x22\x20class\x3D\x22checkbox\x22\x3E\x0A\x09\x09\x09\x20\x20\x20\x20\x3Cinput\x20id\x3D\x27autoscroll_check\x27\x20type\x3D\x22checkbox\x22\x20checked\x3E\x0A\x09\x09\x09\x20\x20\x20\x20Autoscroll\x0A\x09\x09\x20\x20\x20\x20\x3C\x2Flabel\x3E\x0A\x0A\x09\x09\x20\x20\x20\x20\x3Clabel\x20id\x3D\x22echo_label\x22\x20class\x3D\x22checkbox\x22\x3E\x0A\x09\x09\x09\x20\x20\x20\x20\x3Cinput\x20id\x3D\x27echo_check\x27\x20type\x3D\x22checkbox\x22\x3E\x0A\x09\x09\x09\x20\x20\x20\x20Echo\x0A\x09\x09\x20\x20\x20\x20\x3C\x2Flabel\x3E\x0A\x09\x20\x20\x20\x20\x3C\x2Fspan\x3E\x0A\x0A\x09\x09\x3Cselect\x20id\x3D\x22serial\x2Dline\x2Dendings\x22\x3E\x0A\x09\x09\x09\x3Coption\x20value\x3D\x22nle\x22\x3ENo\x20line\x20ending\x3C\x2Foption\x3E\x0A\x09\x09\x09\x3Coption\x20value\x3D\x22nl\x22\x3ENewline\x3C\x2Foption\x3E\x0A\x09\x09\x09\x3Coption\x20value\x3D\x22cr\x22\x3ECarriage\x20return\x3C\x2Foption\x3E\x0A\x09\x09\x09\x3Coption\x20value\x3D\x22nlcr\x22\x20selected\x3D\x22selected\x22\x3EBoth\x20NL\x20\x26\x20CR\x3C\x2Foption\x3E\x0A\x09\x09\x3C\x2Fselect\x3E\x0A\x09\x3C\x2Fdiv\x3E\x0A\x0A\x09\x3Cdiv\x20class\x3D\x22input\x2Dappend\x22\x3E\x0A\x09\x09\x3Cinput\x20id\x3D\x22text2send\x22\x20type\x3D\x22text\x22\x20placeholder\x3D\x22Type\x20a\x20message\x22\x20onkeydown\x3D\x22compilerflasher.pluginHandler.serialSendOnEnter\x28event\x29\x22\x3E\x0A\x09\x09\x3Cbutton\x20id\x3D\x22serial_send\x22\x20onclick\x3D\x22compilerflasher.pluginHandler.serialSend\x28\x29\x22\x20class\x3D\x22btn\x22\x20title\x3D\x22Send\x20Message\x22\x3ESend\x3C\x2Fbutton\x3E\x0A\x09\x3C\x2Fdiv\x3E\x0A\x3C\x2Fdiv\x3E\x0A';
+        var staticSerialMonitorSection = '\x20\x20\x20\x20\x20\x20\x20\x20\x3Cstyle\x3E\x0A\x20\x20\x20\x20\x23serial_monitor_content\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20display\x3A\x20none\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23serial_hud\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20overflow\x2Dy\x3A\x20auto\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23serial_monitor_hud_and_autoscroll\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20display\x3A\x20inline\x2Dblock\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23serial\x2Dchecboxes\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20display\x3A\x20inline\x2Dblock\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23serial\x2Dchecboxes\x20\x3E\x20label\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20margin\x2Dbottom\x3A\x200\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23autoscroll_label\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20position\x3A\x20relative\x3B\x0A\x20\x20\x20\x20\x20\x20\x20\x20top\x3A\x208px\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23autoscroll_check\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20display\x3A\x20block\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23echo_label\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20position\x3A\x20relative\x3B\x0A\x20\x20\x20\x20\x20\x20\x20\x20top\x3A\x203px\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20.serial\x2Dmonitor\x2Decho\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20display\x3A\x20inline\x2Dblock\x3B\x0A\x20\x20\x20\x20\x20\x20\x20\x20color\x3A\x20\x23FF0000\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x0A\x20\x20\x20\x20\x23serial\x2Dline\x2Dendings\x20\x7B\x0A\x20\x20\x20\x20\x20\x20\x20\x20width\x3A\x20130px\x3B\x0A\x20\x20\x20\x20\x20\x20\x20\x20margin\x2Dbottom\x3A\x2010px\x3B\x0A\x20\x20\x20\x20\x7D\x0A\x3C\x2Fstyle\x3E\x0A\x0A\x3Cdiv\x20class\x3D\x22serial\x2Dmonitor\x2Dcontainer\x22\x3E\x0A\x20\x20\x20\x20\x3Cdiv\x20id\x3D\x22serial_monitor_content\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x3Cdiv\x20id\x3D\x22serial_monitor_hud_and_autoscroll\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x3Cspan\x20id\x3D\x22serial\x2Dchecboxes\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Clabel\x20id\x3D\x22autoscroll_label\x22\x20class\x3D\x22checkbox\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Cinput\x20id\x3D\x27autoscroll_check\x27\x20type\x3D\x22checkbox\x22\x20checked\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Autoscroll\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Flabel\x3E\x0A\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Clabel\x20id\x3D\x22echo_label\x22\x20class\x3D\x22checkbox\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Cinput\x20id\x3D\x27echo_check\x27\x20type\x3D\x22checkbox\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Echo\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Flabel\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Fspan\x3E\x0A\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Cselect\x20id\x3D\x22serial\x2Dline\x2Dendings\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Coption\x20value\x3D\x22nle\x22\x3ENo\x20line\x20ending\x3C\x2Foption\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Coption\x20value\x3D\x22nl\x22\x3ENewline\x3C\x2Foption\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Coption\x20value\x3D\x22cr\x22\x3ECarriage\x20return\x3C\x2Foption\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Coption\x20value\x3D\x22nlcr\x22\x20selected\x3D\x22selected\x22\x3EBoth\x20NL\x20\x26\x20CR\x3C\x2Foption\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Fselect\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Fdiv\x3E\x0A\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x3Cdiv\x20class\x3D\x22input\x2Dappend\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Cinput\x20id\x3D\x22text2send\x22\x20type\x3D\x22text\x22\x20placeholder\x3D\x22Type\x20a\x20message\x22\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20onkeydown\x3D\x22compilerflasher.pluginHandler.serialSendOnEnter\x28event\x29\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3Cbutton\x20id\x3D\x22serial_send\x22\x20onclick\x3D\x22compilerflasher.pluginHandler.serialSend\x28\x29\x22\x20class\x3D\x22btn\x22\x20title\x3D\x22Send\x20Message\x22\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20Send\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Fbutton\x3E\x0A\x20\x20\x20\x20\x20\x20\x20\x20\x3C\x2Fdiv\x3E\x0A\x20\x20\x20\x20\x3C\x2Fdiv\x3E\x0A\x0A\x20\x20\x20\x20\x3Cpre\x20id\x3D\x22serial_hud\x22\x20class\x3D\x22well\x22\x3E\x3C\x2Fpre\x3E\x0A\x3C\x2Fdiv\x3E\x0A\x20\x20\x20\x20';
 
         if (window.codebender
             && window.codebender.compilerflasher
@@ -3346,7 +3185,7 @@ function logging() {
  */
 window.flashing_errors =
 {
-    "-1": "Couldn’t find an Arduino on the selected port. If you are using Leonardo check that you have the correct port selected. If it is correct, try pressing the board’s reset button after initiating the upload.",
+    "-1": "Couldnâ€™t find an Arduino on the selected port. If you are using Leonardo check that you have the correct port selected. If it is correct, try pressing the boardâ€™s reset button after initiating the upload.",
     "-2": "There was a problem programming your Arduino. If you are using a non-English Windows version, or username please contact us.",
     "-22": "The selected port seems to be in use. Please check your board connection, and make sure that you are not using it from some other application or you don't have an open serial monitor.",
     "-23": "Another flashing process is still active. Please wait until it is done and try again.",
@@ -3380,4 +3219,3 @@ window.flashing_errors =
     33005: "This baudrate is not supported by the operating system.",
     36000: "Could not connect to your device. Make sure that you have connected it properly, that you have selected the correct settings (device type and port) and try again."
 };
-
